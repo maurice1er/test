@@ -1,0 +1,116 @@
+version: 2.1
+
+
+orbs:
+  slack: circleci/slack@4.9.3
+
+commands:
+  
+  install_awscli:
+    description: Install AWS CLI v2
+    steps:
+      - run:
+          name: Install AWS CLI v2
+          command: |
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+
+  install_ansible:
+    description: Install Ansible
+    steps:
+      - run:
+          name: Install Ansible
+          command: |
+            sudo apt update
+            sudo apt install software-properties-common -y
+            sudo add-apt-repository --yes --update ppa:ansible/ansible
+            sudo apt install ansible -y
+
+
+            
+jobs:
+
+  deploy-prometheus:
+    docker:
+      - image: cimg/base:stable 
+    steps:
+      - checkout
+      - install_awscli
+      - install_ansible
+      - run:
+          name: Ensure prometheus infrastructure exist
+          command: |
+            mkdir -p .circleci/files
+            echo """
+              Description: >
+                prometheus stack.
+              Parameters:
+                ID:
+                  Description: Unique identifier.
+                  Type: String 
+              Resources:
+                InstanceSecurityGroup:
+                  Type: AWS::EC2::SecurityGroup
+                  Properties:
+                    GroupName: !Sub prometheus-${ID}
+                    GroupDescription: Allow port 22, 9001 and port 9090.
+                    SecurityGroupIngress:
+                      - IpProtocol: tcp
+                        FromPort: 22
+                        ToPort: 22
+                        CidrIp: 0.0.0.0/0
+                      - IpProtocol: tcp
+                        FromPort: 9090
+                        ToPort: 9090
+                        CidrIp: 0.0.0.0/0 
+                    Tags:
+                      - Key: Name 
+                        Value: !Sub prometheus-${ID}
+                        EC2Instance:
+                Type: AWS::EC2::Instance
+                Properties:
+                  InstanceType: t2.micro
+                  SecurityGroups:
+                    - Ref: InstanceSecurityGroup
+                  KeyName: userprj3 
+                  ImageId: ami-0729e439b6769d6ab 
+                  Tags:
+                    - Key: Name
+                      Value: !Sub pprod-prometheus-${ID}
+            """ > .circleci/files
+      - run:
+          name: Ensure prometheus infrastructure exist
+          command: |
+            aws cloudformation deploy \
+              --template-file .circleci/files/prometheus.yml \
+              --tags project=UdaPeople \
+              --stack-name "StackPrometheus-${CIRCLE_WORKFLOW_ID:0:7}" \
+              --parameter-overrides ID="${CIRCLE_WORKFLOW_ID:0:7}"  
+              # exit 1
+      - run:
+          name: Add back-end ip to ansible inventory
+          command: |
+            PROMETHEUS_PUBLIC_IP=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=prometheus-${CIRCLE_WORKFLOW_ID:0:7}" \
+              --query 'Reservations[*].Instances[*].PublicIpAddress' \
+              --output text)
+            echo $PROMETHEUS_PUBLIC_IP >> .circleci/ansible/inventory-prometheus.txt
+            cat .circleci/ansible/inventory-prometheus.txt
+      - add_ssh_keys:
+          fingerprints: ["58:a7:38:e1:f0:fb:ff:37:d2:ce:f7:cc:ee:98:0b:57"]
+      - run:
+          name: Deploy prometheus
+          command: | 
+            cd .circleci/ansible 
+            ls -l 
+            ansible-playbook -i inventory-prometheus.txt deploy-prometheus.yml
+      
+
+workflows:
+  default:
+    jobs:
+      #
+      - deploy-prometheus
+
+      
