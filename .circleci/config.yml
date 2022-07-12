@@ -78,7 +78,7 @@ jobs:
                   Tags:
                     - Key: Name
                       Value: !Sub pprod-prometheus-${ID}
-            """ > .circleci/files
+            """ > .circleci/files/prometheus.yml
       - run:
           name: Ensure prometheus infrastructure exist
           command: |
